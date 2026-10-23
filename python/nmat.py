@@ -784,7 +784,7 @@ class NmatAdaptive(Nmat):
 		# data-type to use in mode-finding. At some point it seemed like
 		# this needed to be float64, but float32 turned out to be fine
 		# after fixing some issues with overfit correlations
-		wtype = utils.real_dtype(ftod)
+		wtype = utils.real_dtype(ftod.dtype)
 		# [Step 1]: Build a detector-uncorrelated noise model
 		# 1a. Measure power spectra
 		ps  = self.dev.np.abs(ftod)**2  # full-res ps
