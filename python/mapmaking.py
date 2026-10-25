@@ -658,6 +658,24 @@ class SignalMap(Signal):
 			self.write(prefix, self.tmap, tag="time", extra={"TREF":self.tref})
 	valid_outputs = ["map","ivar","hits","bin","rhs","div","time","xlink"]
 
+class SignalMapAdd(SignalMap):
+	"""A second sky map, in another coordinate system, solved jointly with the main one.
+	SignalMap's map2tod overwrites the tod, so this one projects into a scratch tod and adds,
+	which lets it come before the (clobbering) main SignalMap. Typical use: a polarized map in
+	horizontal coordinates for ground pickup next to a sidelobe-frame map (sys="hor")."""
+	clobbers = False
+	def new(self): return SignalMapAdd(self.shape, self.wcs, self.comm,
+			dev=self.dev, name=self.name, ofmt=self.ofmt, outputs=self.outputs,
+			precon=self.prec_mode, ext=self.ext, dtype=self.dtype, prior=self.prior.new(),
+			ibuf=self.ibuf, obuf=self.obuf, sys=self.sys, interpol=self.interpol,
+			autocrop=self.autocrop, ocomps=self.ocomps)
+	def forward(self, id, gtod, glmap, tmul=1):
+		if id not in self.data: return
+		if tmul != 1: gtod *= tmul
+		tmp = self.dev.pools[self.name+"_tod"].zeros(gtod.shape, gtod.dtype)
+		self.data[id].pmap.forward(tmp, glmap)
+		gtod += tmp
+
 # What do we need for multi-band mapmaking?
 # Just loop over SignalMaps, but override their TileDistribution
 # ompi to a new one built from their pixbox union

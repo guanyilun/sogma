@@ -33,6 +33,7 @@ parser.add_argument(      "--sys",     type=str, default="cel")
 parser.add_argument("-o", "--output",  type=str, default="auto", help="map, ivar, hits, rhs, xlink, time, cut, elmod, nmat or auto. auto is equivalent to map,ivar,xlink. In depth1 and individual mode, auto also includes time")
 parser.add_argument(      "--elmod",   type=int, default=0)
 parser.add_argument(      "--pickup",  type=str, default="none")
+parser.add_argument(      "--joint-sys", type=str, default=None, help="Also solve for a second T/Q/U map in this coordinate system (e.g. hor), jointly with the main map")
 parser.add_argument(      "--precon",  type=str, default="ivar")
 parser.add_argument(      "--dets",    type=str, default=None, help="Path to file with white-list of channel ids, e.g. sch_ufm_mv21_1755145838_3_338. See --detids if you want to use detector ids instead")
 parser.add_argument(      "--detids",  type=str, default=None, help="Path to file with white-list of detector ids, e.g. Mv21_f090_Ar00c02A. One per line. See --dets if you want to use channel ids instead")
@@ -127,6 +128,12 @@ if args.elmod > 0:
 pickup = gutils.parse_pickup(args.pickup)
 if pickup.mode != "none":
 	signals.append(mapmaking.SignalPickup(comm_per, res=pickup.res*utils.arcmin, phase=pickup.mode=="phase", shared=bool(pickup.shared), dev=dev, dtype=dtype, outputs=pickup_out))
+
+if args.joint_sys:
+	# A second map in another coordinate system, solved jointly. It adds into the tod,
+	# so it can come before the main (clobbering) SignalMap.
+	signals.append(mapmaking.SignalMapAdd(shape, wcs, comm_per, dev=dev, dtype=dtype, sys=args.joint_sys, name="joint",
+		autocrop=args.autocrop, outputs=map_out, precon=args.precon, ocomps=ocomps))
 
 # SignalMap must be last, because it currently does d = Pm instead of d += Pm,
 # so it would clobber any other signals. (Signals are evaluated in reverse order)
