@@ -1170,6 +1170,8 @@ def apply_pointing_model(az, el, roll, detoffs, model):
 		# Apply offsets
 		az    += model.enc_offset_az
 		el    += model.enc_offset_el
+		# yilung-crfix: apply the corotator encoder offset, as sotodlib's model_lat_v1_v2 does
+		corot += model.enc_offset_cr
 		# El sag. Should the quadratic term preserve the sign?
 		Δel = el     - model.el_sag_pivot
 		el += Δel    * model.el_sag_lin
