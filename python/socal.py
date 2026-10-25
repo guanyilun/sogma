@@ -3,7 +3,7 @@ from pixell import config, utils, enmap, ephem, pointsrcs, coordsys, bunch, colo
 from . import pmat, tiling, device, socut, gutils, soeph, errors
 from .logging import L
 
-config.default("autocut",       "objects,sidelobes", "Comma-separated list of which autocuts to apply. Currently recognized: objects: The object cut. sidelobes: The sidelobe cut. galaxy: Cuts low galactic latitudes")
+config.default("autocut",       "objects,sidelobes", "Comma-separated list of which autocuts to apply. Currently recognized: objects: The object cut. sidelobes: The sidelobe cut. galaxy: Cuts low galactic latitudes. scan_inc / scan_dec: keep only samples scanning towards increasing / decreasing azimuth")
 # planetas and asteroids defined in sogma.soeph
 
 def autocut(obs, id="?", which=None, geo=None, dev=None, meta=None):
@@ -14,7 +14,8 @@ def autocut(obs, id="?", which=None, geo=None, dev=None, meta=None):
 	if which == "none" or len(which) == 0: return obs
 	which   = which.split(",")
 	# The functions that implement each autocut type
-	cutfuns = {"objects": object_cut, "sidelobes": sidelobe_cut, "galaxy":galaxy_cut}
+	cutfuns = {"objects": object_cut, "sidelobes": sidelobe_cut, "galaxy":galaxy_cut,
+		"scan_inc": lambda obs, **kw: scandir_cut(obs, keep=+1), "scan_dec": lambda obs, **kw: scandir_cut(obs, keep=-1)}
 	# Whether these are generally bright enough that they should
 	# be gapfilled. This is the case if they are bright enough that
 	# they would distort the noise model, or if they represent a sudden
@@ -22,7 +23,7 @@ def autocut(obs, id="?", which=None, geo=None, dev=None, meta=None):
 	# cut would not be able to represent. Not gapfilling is beneficial for
 	# broad regions like sidelobe cuts, which can be tens of degrees across,
 	# since removing these would mess up the noise model too.
-	bright  = {"objects": True,       "sidelobes": False,        "galaxy": False}
+	bright  = {"objects": True,       "sidelobes": False,        "galaxy": False, "scan_inc": False, "scan_dec": False}
 	cuts = [obs.cuts]
 	fill = [obs.fill]
 	for i, cutname in enumerate(which):
@@ -79,6 +80,22 @@ def object_cut(obs, id="?", object_list=None, geo=None, sysdown=8, base_res=0.5*
 	return [cuts]
 
 config.default("galcut_rad", 2.0, "Degrees of avoidance around the galaxy when the galaxy cut is enabled")
+def scandir_cut(obs, keep=+1, smooth=2.0):
+	"""Cut every sample where the boresight azimuth is not moving in the direction keep
+	(+1: increasing azimuth, -1: decreasing), for all detectors. The velocity is smoothed
+	over smooth seconds so that noise near the turnarounds does not flip it."""
+	ctime = np.asarray(obs.ctime)
+	az    = np.unwrap(np.asarray(obs.boresight[1]))
+	ndet, nsamp = obs.tod.shape
+	vel   = np.gradient(az, ctime)
+	n     = max(1, int(round(smooth/np.median(np.diff(ctime)))))
+	vel   = np.convolve(vel, np.ones(n)/n, mode="same")
+	bad   = np.sign(vel) != keep
+	edges = np.flatnonzero(np.diff(np.concatenate([[0], bad.astype(np.int8), [0]])))
+	starts, stops = edges[0::2], edges[1::2]
+	dets  = np.repeat(np.arange(ndet, dtype=np.int32), len(starts))
+	return [socut.Simplecut(dets=dets, starts=np.tile(starts, ndet), lens=np.tile(stops-starts, ndet), ndet=ndet, nsamp=nsamp)]
+
 def galaxy_cut(obs, maxlat=None, id="?", geo=None, dev=None, meta=None):
 	maxlat = config.get("galcut_rad", maxlat)*utils.degree
 	return lat_cut(obs, [-maxlat,maxlat], id=id, sys="gal", dev=dev, meta=meta)
