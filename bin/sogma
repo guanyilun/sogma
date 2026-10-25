@@ -126,7 +126,7 @@ if args.elmod > 0:
 	signals.append(mapmaking.SignalElMod(comm_per, order=args.elmod, dev=dev, dtype=dtype, outputs=elmod_out))
 pickup = gutils.parse_pickup(args.pickup)
 if pickup.mode != "none":
-	signals.append(mapmaking.SignalPickup(comm_per, res=pickup.res*utils.arcmin, phase=pickup.mode=="phase", dev=dev, dtype=dtype, outputs=pickup_out))
+	signals.append(mapmaking.SignalPickup(comm_per, res=pickup.res*utils.arcmin, phase=pickup.mode=="phase", shared=bool(pickup.shared), dev=dev, dtype=dtype, outputs=pickup_out))
 
 # SignalMap must be last, because it currently does d = Pm instead of d += Pm,
 # so it would clobber any other signals. (Signals are evaluated in reverse order)

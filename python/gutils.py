@@ -1088,6 +1088,7 @@ def parse_pickup(desc):
 	parser = utils.CommaArgparse()
 	parser.add_argument("mode", choices=["none", "az", "phase"])
 	parser.add_argument("-r", "--res", type=float, default=15)
+	parser.add_argument("-s", "--shared", type=int, default=0, help="1: one profile per observation for all detectors")
 	return parser.parse_args(desc)
 
 # This and other SOPATH stuff (like in soeph) should go into a new module, and hook into the site config

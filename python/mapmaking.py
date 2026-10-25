@@ -1181,7 +1181,7 @@ class SignalElMod(Signal):
 	valid_outputs = ["map"]
 
 class SignalPickup(Signal):
-	def __init__(self, comm, res=15*utils.arcmin, phase=False,
+	def __init__(self, comm, res=15*utils.arcmin, phase=False, shared=False,
 			prior=None, dev=None, name="pickup", ofmt="{name}_{id}",
 			dtype=np.float32, outputs=[]):
 		Signal.__init__(self, name=name, ofmt=ofmt, outputs=outputs, ext="fits")
@@ -1190,6 +1190,8 @@ class SignalPickup(Signal):
 		self.prior = prior or PriorDiv()
 		self.dtype = dtype
 		self.phase = phase
+		# shared: one profile per observation for all detectors, instead of one per detector
+		self.shared= shared
 		self.res   = res
 		self.off   = 0
 		self.data  = {}
@@ -1201,7 +1203,7 @@ class SignalPickup(Signal):
 		self.data = {}
 		self.rhs  = []
 		self.idiv = []
-	def new(self): return SignalPickup(self.comm, res=self.res, phase=self.phase,
+	def new(self): return SignalPickup(self.comm, res=self.res, phase=self.phase, shared=self.shared,
 			prior=self.prior.new(), dev=self.dev, name=self.name, ofmt=self.ofmt,
 			dtype=self.dtype, outputs=self.outputs)
 	def add_obs(self, id, obs, iN, iNd):
@@ -1223,11 +1225,15 @@ class SignalPickup(Signal):
 		pcut.clear(iNd)
 		obs_div[:] = 0
 		P.backward(iNd, obs_div)
+		if self.shared:
+			obs_rhs = obs_rhs.sum(0, keepdims=True)
+			obs_div = obs_div.sum(0, keepdims=True)
 		with utils.nowarn():
 			obs_idiv = utils.without_nan(1/self.dev.get(obs_div)) # back to the cpu
 		# Keep track of our degrees of freedom
 		ndof = obs_rhs.size
-		self.data[id] = bunch.Bunch(P=P, ndet=ndet, i1=self.off, i2=self.off+ndof)
+		nrow = 1 if self.shared else ndet
+		self.data[id] = bunch.Bunch(P=P, ndet=ndet, nrow=nrow, i1=self.off, i2=self.off+ndof)
 		self.off += ndof
 		self.rhs.append(obs_rhs.reshape(-1))
 		self.idiv.append(obs_idiv.reshape(-1))
@@ -1246,11 +1252,18 @@ class SignalPickup(Signal):
 	def forward(self, id, tod, pickup):
 		if id not in self.data: return
 		d = self.data[id]
-		d.P.forward(tod, pickup[d.i1:d.i2].reshape((d.ndet,d.P.nx)))
+		x = pickup[d.i1:d.i2].reshape((d.nrow,d.P.nx))
+		if self.shared: x = self.dev.np.ascontiguousarray(self.dev.np.broadcast_to(x, (d.ndet,d.P.nx)))
+		d.P.forward(tod, x)
 	def backward(self, id, tod, pickup):
 		if id not in self.data: return
 		d = self.data[id]
-		d.P.backward(tod, pickup[d.i1:d.i2].reshape((d.ndet,d.P.nx)))
+		if self.shared:
+			x = self.dev.np.zeros((d.ndet,d.P.nx), pickup.dtype)
+			d.P.backward(tod, x)
+			pickup[d.i1:d.i2] += x.sum(0)
+		else:
+			d.P.backward(tod, pickup[d.i1:d.i2].reshape((d.ndet,d.P.nx)))
 	def precon(self, pickup):
 		return pickup*self.idiv
 	def to_work  (self, x): return self.dev.np.array(x)
@@ -1261,8 +1274,8 @@ class SignalPickup(Signal):
 		if not force and tag not in self.outputs: return
 		# Will output a file per obs
 		for id, d in self.data.items():
-			if self.phase: pickup = np.moveaxis(m[d.i1:d.i2].reshape((d.ndet,2,d.P.nx//2)),1,0)
-			else:          pickup = m[d.i1:d.i2].reshape((d.ndet,d.P.nx))
+			if self.phase: pickup = np.moveaxis(m[d.i1:d.i2].reshape((d.nrow,2,d.P.nx//2)),1,0)
+			else:          pickup = m[d.i1:d.i2].reshape((d.nrow,d.P.nx))
 			wcs    = wcsutils.explicit(crval=[d.P.baz0/utils.degree,0], cdelt=[d.P.dbaz/utils.degree,1], crpix=[1,1])
 			pickup = enmap.enmap(pickup, wcs, copy=False)
 			oname  = self.ofmt.format(name=self.name, id=id.replace(":","_"))
