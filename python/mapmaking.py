@@ -669,6 +669,11 @@ class SignalMapAdd(SignalMap):
 			precon=self.prec_mode, ext=self.ext, dtype=self.dtype, prior=self.prior.new(),
 			ibuf=self.ibuf, obuf=self.obuf, sys=self.sys, interpol=self.interpol,
 			autocrop=self.autocrop, ocomps=self.ocomps)
+	def precalc_setup(self, id, reset_buffer=True):
+		# The main SignalMap is set up first (signals are evaluated in reverse order) and resets
+		# the shared pointing buffers; resetting them again here would overwrite its pointing,
+		# which backward() then reuses. So always append.
+		self.data[id].pmap.precalc_setup(reset_buffer=False)
 	def forward(self, id, gtod, glmap, tmul=1):
 		if id not in self.data: return
 		if tmul != 1: gtod *= tmul
