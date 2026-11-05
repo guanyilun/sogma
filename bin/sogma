@@ -151,6 +151,7 @@ signals.append(signal_map)
 
 # Set up the noise model
 if   args.nmat == "jon":    noise_model = nmat.NmatDetvecs(dev=dev)
+elif args.nmat == "jonlow": noise_model = nmat.NmatDetvecs(dev=dev, mode_bins=[0.02, 0.25, 4.0, 20])
 elif args.nmat == "jond":   noise_model = nmat.NmatDetvecs(dev=dev, downweight=[1e-4, 0.25, 0.50])
 elif args.nmat == "uncorr": noise_model = nmat.NmatUncorr(dev=dev)
 elif args.nmat == "debug":  noise_model = nmat.NmatDebug(dev=dev)
