@@ -230,7 +230,7 @@ class TileDistribution:
 				rbuf = submap[sub.rinds[0],sub.rinds[1]]
 			else:
 				rbuf = None
-			sbuf = np.zeros(sub.rtot*tsize, map.dtype)
+			sbuf = np.zeros(sub.scount*tsize, map.dtype)   # this rank's tiles (rtot is the global count)
 			rinfo= (sub.rcount*tsize, sub.roffs*tsize)
 			sub.comm.Scatterv((rbuf, rinfo), sbuf, root=root)
 			dmap[sub.sinds] += sbuf.reshape((len(sub.sinds),)+dmap.shape[1:])
