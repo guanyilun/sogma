@@ -267,7 +267,7 @@ class TileDistribution:
 		Assumes CAR! Could easily be generalized"""
 		assert self.wcs.wcs.ctype[0][-3:] == "CAR"
 		posmap  = self.dpixmap().astype(float)
-		posmap -= self.wcs.wcs.crpix[1::-1,None,None,None]
+		posmap -= self.wcs.wcs.crpix[1::-1,None,None,None] - 1   # crpix is 1-based, dpixmap 0-based
 		posmap *= self.wcs.wcs.cdelt[1::-1,None,None,None]*utils.degree
 		posmap += self.wcs.wcs.crval[1::-1,None,None,None]*utils.degree
 		return posmap
