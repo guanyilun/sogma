@@ -77,6 +77,7 @@ class SoFastLoader(socommon.Loader):
 class SoFastLoadInfo(socommon.LoadInfo): pass
 
 config.default("cuts_optional", False, "If true, it's not an error for the expected cuts to be missing from the preprocess database")
+config.default("jump_fixes", True, "yilung-jumpfix: subtract the archive's exact jump heights when it has them; False: ignore them and dejump from border means as for any archive")
 class FastMeta:
 	def __init__(self, context):
 		self.context   = context
@@ -203,7 +204,7 @@ class FastMeta:
 				# yilung-jumpfix: an archive that carries the exact jump heights (jumps_2pi/fix_det, fix_samp,
 				# fix_height, rad) has them subtracted in calibrate; its 2pi ranges are then plain cuts (gapfilled),
 				# not re-estimated from border means
-				jump_fixes = read_jump_fixes(pl)
+				jump_fixes = read_jump_fixes(pl) if config.get("jump_fixes") else None
 				paman.wrap("cuts_jumps_2pi" if jump_fixes is not None else "jumps_2pi",
 					read_cuts(pl, "jumps_2pi/jump_flag",  optional=optional), [(0,"dets"),(1,"samps")])
 				paman.wrap("jumps_slow",  read_cuts(pl, "jumps_slow/jump_flag", optional=optional), [(0,"dets"),(1,"samps")])
