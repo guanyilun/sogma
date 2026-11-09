@@ -403,7 +403,10 @@ def calibrate(data, meta, mul=32, dev=None, prev_obs=None, dtype=np.float32, poo
 	# yilung-jumpfix: subtract the archive's exact jump heights (rad, here in calibrated units) from each step on
 	if "jump_fixes" in meta and meta.jump_fixes is not None:
 		with bench.mark("jump_fixes", tfun=dev.time):
-			apply_jump_fixes(signal, meta.jump_fixes, meta.aman.dets.vals, phase_to_cmb[:,0], i1, i2)
+			# the fixes carry absolute sample numbers (the archive's frame); the TOD here starts at
+			# meta.aman.samps.offset, which a group load (samprange) or a time split moves
+			off = meta.aman.samps.offset
+			apply_jump_fixes(signal, meta.jump_fixes, meta.aman.dets.vals, phase_to_cmb[:,0], i1+off, i2+off)
 
 	if debug_det: bunch.write("test_cal.hdf", bunch.Bunch(tod=dev.get(signal[i])))
 
