@@ -200,7 +200,12 @@ class FastMeta:
 				glitches = "glitches_pre_hwpss" if has_hwp else "glitches"
 				paman.wrap("cuts_glitch", read_cuts(pl, glitches+"/glitch_flags",optional=optional), [(0,"dets"),(1,"samps")])
 				paman.wrap("cuts_smurf",  read_cuts(pl, "smurfgaps/smurfgaps",  optional=optional), [(0,"dets"),(1,"samps")])
-				paman.wrap("jumps_2pi",   read_cuts(pl, "jumps_2pi/jump_flag",  optional=optional), [(0,"dets"),(1,"samps")])
+				# yilung-jumpfix: an archive that carries the exact jump heights (jumps_2pi/fix_det, fix_samp,
+				# fix_height, rad) has them subtracted in calibrate; its 2pi ranges are then plain cuts (gapfilled),
+				# not re-estimated from border means
+				jump_fixes = read_jump_fixes(pl)
+				paman.wrap("cuts_jumps_2pi" if jump_fixes is not None else "jumps_2pi",
+					read_cuts(pl, "jumps_2pi/jump_flag",  optional=optional), [(0,"dets"),(1,"samps")])
 				paman.wrap("jumps_slow",  read_cuts(pl, "jumps_slow/jump_flag", optional=optional), [(0,"dets"),(1,"samps")])
 				#paman.wrap("cuts_turn",   read_cuts(pl, "turnaround_flags/turnarounds", optional=optional), [(0,"dets"),(1,"samps")])
 			try:
@@ -255,7 +260,7 @@ class FastMeta:
 			dac_to_phase = np.pi/2**15, timestamp_to_ctime=1e-8,
 			abscal_cmb = abscal_cmb, pointing_model=pointing_model,
 			sens_lim=sens_lim, ndet_full=ndet_full,
-			sidelobes=sidelobes)
+			sidelobes=sidelobes, jump_fixes=jump_fixes)
 
 # This doesn't really belong here, unless we rename the module
 def fast_data(finfos, detax, sampax, alloc=None, fields=[
@@ -394,6 +399,11 @@ def calibrate(data, meta, mul=32, dev=None, prev_obs=None, dtype=np.float32, poo
 		if "relcal" in meta.aman: phase_to_cmb *= meta.aman.relcal[:,None]
 		signal *= dev.np.array(meta.dac_to_phase * phase_to_cmb)
 
+	# yilung-jumpfix: subtract the archive's exact jump heights (rad, here in calibrated units) from each step on
+	if "jump_fixes" in meta and meta.jump_fixes is not None:
+		with bench.mark("jump_fixes", tfun=dev.time):
+			apply_jump_fixes(signal, meta.jump_fixes, meta.aman.dets.vals, phase_to_cmb[:,0], i1, i2)
+
 	if debug_det: bunch.write("test_cal.hdf", bunch.Bunch(tod=dev.get(signal[i])))
 
 	# Subtract the HWP scan-synchronous signal. We do this before deglitching because
@@ -433,6 +443,9 @@ def calibrate(data, meta, mul=32, dev=None, prev_obs=None, dtype=np.float32, poo
 		A     = dev.np.polyval(dev.np.array(meta.iir_params.a[:meta.iir_params.order+1][::-1]), z)
 		B     = dev.np.polyval(dev.np.array(meta.iir_params.b[:meta.iir_params.order+1][::-1]), z)
 		iir_filter = A/B # will multiply by this
+		# yilung-iirdisable: a stream whose readout filter was disabled carries no filter to undo
+		if "enabled" in meta.iir_params and not meta.iir_params["enabled"]:
+			iir_filter = dev.np.ones_like(iir_filter)
 		iir_filter *= norm # Hack: cheap to handle normalization here
 		ftod *= iir_filter
 	with bench.mark("time consts", tfun=dev.time):
@@ -930,6 +943,23 @@ class AcalCache:
 #	for bi, bin in enumerate(bins):
 #		for i in range(bin[0],bin[1]):
 #			bind[i] = bi
+
+def read_jump_fixes(pl):
+	"""The archive's exact jump corrections (yilung-jumpfix), or None if it has none: a Bunch of detector
+	names, step samples (in the TOD's sample index) and heights in rad (level after minus level before)."""
+	if "jumps_2pi/fix_height" not in pl.group: return None
+	det = pl.read("jumps_2pi/fix_det")
+	return bunch.Bunch(dets=np.asarray(pl.dets)[det], samps=pl.read("jumps_2pi/fix_samp") + pl.samps[1],
+		heights=pl.read("jumps_2pi/fix_height"))
+
+def apply_jump_fixes(signal, fixes, dets, cal, i1, i2):
+	"""Subtract each fix's height (rad) times the detector's calibration from its step sample on, within the
+	cropped range [i1, i2) of the TOD; steps before i1 are a constant offset of the cropped TOD and skipped."""
+	row = {d: i for i, d in enumerate(dets)}
+	for d, s, h in zip(fixes.dets, fixes.samps, fixes.heights):
+		r = row.get(d)
+		if r is None or not (i1 <= s < i2): continue
+		signal[r, s-i1:i2-i1] -= signal.dtype.type(h*cal[r])
 
 def read_cuts(pl, path, optional=False):
 	try:
