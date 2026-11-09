@@ -946,11 +946,14 @@ class AcalCache:
 
 def read_jump_fixes(pl):
 	"""The archive's exact jump corrections (yilung-jumpfix), or None if it has none: a Bunch of detector
-	names, step samples (in the TOD's sample index) and heights in rad (level after minus level before)."""
+	names, step samples (in the TOD's sample index) and heights in rad (level after minus level before).
+	Stored per detector, padded: jumps_2pi/fix_samp (-1) and jumps_2pi/fix_height (NaN), [ndet, nmax]."""
 	if "jumps_2pi/fix_height" not in pl.group: return None
-	det = pl.read("jumps_2pi/fix_det")
-	return bunch.Bunch(dets=np.asarray(pl.dets)[det], samps=pl.read("jumps_2pi/fix_samp") + pl.samps[1],
-		heights=pl.read("jumps_2pi/fix_height"))
+	samp = np.asarray(pl.read("jumps_2pi/fix_samp", "d"))
+	h    = np.asarray(pl.read("jumps_2pi/fix_height", "d"))
+	# rows of detectors cut before the jump step come back as zeros from the full-detector copy: a slip is never 0
+	di, k = np.nonzero(np.isfinite(h) & (h != 0) & (samp >= 0))
+	return bunch.Bunch(dets=np.asarray(pl.dets)[pl.inds][di], samps=samp[di,k] + pl.samps[1], heights=h[di,k])
 
 def apply_jump_fixes(signal, fixes, dets, cal, i1, i2):
 	"""Subtract each fix's height (rad) times the detector's calibration from its step sample on, within the
