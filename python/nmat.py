@@ -1,5 +1,5 @@
 import numpy as np, contextlib
-from pixell import utils, bunch
+from pixell import utils, bunch, config
 from . import gutils, device
 from .logging import L
 
@@ -353,6 +353,12 @@ class NmatDetvecs(Nmat):
 		# Cut bins that extend beyond our max frequency
 		bin_edges = self.bin_edges[self.bin_edges < srate/2 * 0.99]
 		bins      = makebins(bin_edges, srate, nfreq, nmin=2*nmode, rfun=np.round)
+		# yilung-lines: give narrow correlated lines (vibration) bins of their own,
+		# so their power is not averaged away over a wide bin
+		if config.get("nmat_lines"):
+			lines = find_mode_lines(ft, V, srate, nsamp, dev=self.dev)
+			bins  = add_line_bins(bins, lines, nmin=2*nmode, nfreq=nfreq)
+			L.print("nmat lines: %d (%s Hz)" % (len(lines), " ".join(["%.2f" % ((a+b)/2*srate/nsamp) for a,b in lines])), level=3)
 		nbin      = len(bins)
 		# Now measure the power of each basis vector in each bin. The residual
 		# noise will be modeled as uncorrelated
@@ -1441,6 +1447,61 @@ def freq2ind(freqs, srate, nfreq, rfun=None):
 	if freqs is None: return freqs
 	if rfun  is None: rfun = np.ceil
 	return rfun(np.asarray(freqs)/(srate/2.0)*nfreq).astype(int)
+
+config.default("nmat_lines", False, "yilung-lines: find narrow lines in the correlated modes' power and give each its own noise bin (NmatDetvecs)")
+config.default("nmat_line_ratio", 3.0, "yilung-lines: a line is where the modes' power, smoothed over nmat_line_smooth Hz, exceeds this times its running median over +-0.5 Hz")
+config.default("nmat_line_fmin", 1.0, "yilung-lines: lowest line frequency in Hz (below it the default bins are already narrow)")
+config.default("nmat_line_smooth", 0.02, "yilung-lines: smoothing and detection grid in Hz")
+config.default("nmat_line_pad", 0.02, "yilung-lines: padding added on each side of a line in Hz")
+
+def find_mode_lines(ft, V, srate, nsamp, win=0.5, dev=None):
+	"""Narrow lines in the power of the correlated modes V [ndet,nmode] of ft [ndet,nfreq].
+	Returns [nline,{from,to}] fourier indices."""
+	from scipy import ndimage
+	ratio = config.get("nmat_line_ratio")
+	fmin  = config.get("nmat_line_fmin")
+	step  = config.get("nmat_line_smooth")
+	pad   = config.get("nmat_line_pad")
+	ap    = device.anypy(ft)
+	nfreq = ft.shape[1]
+	df    = srate/nsamp
+	# Power of the modes per frequency, summed over modes
+	ps    = ap.sum(ap.abs(V.T.dot(ft))**2, 0)
+	ps    = dev.get(ps) if dev is not None else np.asarray(ps)
+	# Mean over blocks of step Hz: the detection grid
+	bsize = max(1, int(round(step/df)))
+	nblk  = nfreq//bsize
+	pb    = ps[:nblk*bsize].reshape(nblk, bsize).mean(1)
+	base  = ndimage.median_filter(pb, size=2*int(round(win/step))+1, mode="nearest")
+	hit   = (pb > ratio*base) & (np.arange(nblk)*bsize*df >= fmin) & (np.arange(nblk)*bsize*df < srate/2*0.99)
+	# Contiguous runs of hits become lines, padded
+	lab, nlab = ndimage.label(hit)
+	lines = []
+	npad  = int(round(pad/df))
+	for sl in ndimage.find_objects(lab):
+		i1 = sl[0].start*bsize - npad
+		i2 = sl[0].stop *bsize + npad
+		lines.append([max(i1,1), min(i2,nfreq)])
+	return np.array(lines, int).reshape(-1,2)
+
+def add_line_bins(bins, lines, nmin, nfreq):
+	"""Insert the line ranges [:,{from,to}] as bins of their own into bins [:,{from,to}].
+	Each line bin is widened to at least nmin modes; lines closer than nmin are merged, and
+	default edges closer than nmin to a line bin are dropped, so every bin keeps >= nmin modes."""
+	if len(lines) == 0: return bins
+	wide = []
+	for i1, i2 in sorted(np.asarray(lines).tolist()):
+		if i2-i1 < nmin:
+			c  = (i1+i2)//2
+			i1, i2 = c-nmin//2, c-nmin//2+nmin
+		i1, i2 = max(i1,nmin), min(i2,nfreq-nmin)
+		if i2 <= i1: continue
+		if wide and i1 < wide[-1][1] + nmin: wide[-1][1] = max(wide[-1][1], i2)
+		else: wide.append([i1,i2])
+	if len(wide) == 0: return bins
+	edges = [e for e in np.unique(bins) if all(e <= a-nmin or e >= b+nmin for a, b in wide)]
+	edges = np.unique(np.concatenate([edges, np.array(wide).reshape(-1), [0, nfreq]])).astype(int)
+	return np.array([edges[:-1], edges[1:]]).T
 
 def makebins(edge_freqs, srate, nfreq, nmin=0, rfun=None):
 	# Translate from frequency to index
