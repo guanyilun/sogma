@@ -1449,9 +1449,10 @@ def freq2ind(freqs, srate, nfreq, rfun=None):
 	return rfun(np.asarray(freqs)/(srate/2.0)*nfreq).astype(int)
 
 config.default("nmat_lines", False, "yilung-lines: find narrow lines in the correlated modes' power and give each its own noise bin (NmatDetvecs)")
-config.default("nmat_line_ratio", 3.0, "yilung-lines: a line is where the modes' power, smoothed over nmat_line_smooth Hz, exceeds this times its running median over +-0.5 Hz")
+config.default("nmat_line_ratio", 3.0, "yilung-lines: a line is where any mode's power, averaged over nmat_line_smooth Hz, exceeds this times its running median over +-0.5 Hz")
 config.default("nmat_line_fmin", 1.0, "yilung-lines: lowest line frequency in Hz (below it the default bins are already narrow)")
 config.default("nmat_line_smooth", 0.02, "yilung-lines: smoothing and detection grid in Hz")
+config.default("nmat_line_log", False, "yilung-lines: log each line's width and height (level 3)")
 config.default("nmat_line_pad", 0.02, "yilung-lines: padding added on each side of a line in Hz")
 
 def find_mode_lines(ft, V, srate, nsamp, win=0.5, dev=None):
@@ -1465,15 +1466,17 @@ def find_mode_lines(ft, V, srate, nsamp, win=0.5, dev=None):
 	ap    = device.anypy(ft)
 	nfreq = ft.shape[1]
 	df    = srate/nsamp
-	# Power of the modes per frequency, summed over modes
-	ps    = ap.sum(ap.abs(V.T.dot(ft))**2, 0)
+	# Power of each mode per frequency [nmode,nfreq]: a line usually lives in a few
+	# modes, so it is looked for mode by mode (a sum over modes dilutes it)
+	ps    = ap.abs(V.T.dot(ft))**2
 	ps    = dev.get(ps) if dev is not None else np.asarray(ps)
 	# Mean over blocks of step Hz: the detection grid
 	bsize = max(1, int(round(step/df)))
 	nblk  = nfreq//bsize
-	pb    = ps[:nblk*bsize].reshape(nblk, bsize).mean(1)
-	base  = ndimage.median_filter(pb, size=2*int(round(win/step))+1, mode="nearest")
-	hit   = (pb > ratio*base) & (np.arange(nblk)*bsize*df >= fmin) & (np.arange(nblk)*bsize*df < srate/2*0.99)
+	pb    = ps[:,:nblk*bsize].reshape(len(ps), nblk, bsize).mean(2)
+	base  = ndimage.median_filter(pb, size=(1,2*int(round(win/step))+1), mode="nearest")
+	fblk  = np.arange(nblk)*bsize*df
+	hit   = np.any(pb > ratio*base, 0) & (fblk >= fmin) & (fblk < srate/2*0.99)
 	# Contiguous runs of hits become lines, padded
 	lab, nlab = ndimage.label(hit)
 	lines = []
@@ -1482,6 +1485,18 @@ def find_mode_lines(ft, V, srate, nsamp, win=0.5, dev=None):
 		i1 = sl[0].start*bsize - npad
 		i2 = sl[0].stop *bsize + npad
 		lines.append([max(i1,1), min(i2,nfreq)])
+		if config.get("nmat_line_log"):
+			# The line's width at half maximum, at full resolution, in its strongest mode
+			b1, b2 = sl[0].start, sl[0].stop
+			m  = np.argmax(np.max(pb[:,b1:b2]/base[:,b1:b2],1))
+			j1, j2 = max(b1*bsize-npad,1), min(b2*bsize+npad,nfreq)
+			seg = ps[m,j1:j2]; bg = np.median(base[m,b1:b2])
+			pk  = np.argmax(seg); half = bg + (seg[pk]-bg)/2
+			lo  = pk; hi = pk
+			while lo > 0 and seg[lo-1] > half: lo -= 1
+			while hi < len(seg)-1 and seg[hi+1] > half: hi += 1
+			L.print("nmat line %.3f Hz: detected over %.3f Hz, FWHM %.4f Hz, peak %.0fx (block mean %.1fx), mode %d" % ((j1+pk)*df,
+				(b2-b1)*bsize*df, (hi-lo+1)*df, seg[pk]/bg, np.max(pb[m,b1:b2]/base[m,b1:b2]), m), level=3)
 	return np.array(lines, int).reshape(-1,2)
 
 def add_line_bins(bins, lines, nmin, nfreq):
