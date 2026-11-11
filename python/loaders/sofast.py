@@ -77,6 +77,7 @@ class SoFastLoader(socommon.Loader):
 class SoFastLoadInfo(socommon.LoadInfo): pass
 
 config.default("cuts_optional", False, "If true, it's not an error for the expected cuts to be missing from the preprocess database")
+config.default("meta_time_strict", True, "yilung-fixes: a time outside every range of a time-keyed metadata product (focal plane, pointing model, relcal, abscal) raises DataMissing (the observation is skipped, as sotodlib refuses it); False: use the latest entry, as upstream sogma, silently")
 config.default("jump_fixes", True, "yilung-jumpfix: subtract the archive's exact jump heights when it has them; False: ignore them and dejump from border means as for any archive")
 class FastMeta:
 	def __init__(self, context):
@@ -631,6 +632,13 @@ class WaferInfo:
 #    Would then use type for special casing in FastMeta. Probably the
 #    best approach.
 
+def _out_of_range(what, t, entries):
+	"""The latest entry if meta_time_strict is off (upstream behaviour), else DataMissing."""
+	if not entries: raise errors.DataMissing("%s: empty index" % what)
+	if config.get("meta_time_strict"):
+		raise errors.DataMissing("%s: no entry covers ctime %.0f (ranges %.0f to %.0f)" % (what, t, min(e[0] for e in entries), max(e[1] for e in entries)))
+	return entries[-1]
+
 class DetCache:
 	def __init__(self, obsfiledb, smurf_info, ass_info, wafer_info):
 		self.obsfiledb  = obsfiledb
@@ -756,8 +764,8 @@ class FplaneCache:
 		for i, entry in enumerate(entries):
 			if entry[0] <= t and t < entry[1]:
 				return entry
-		# Return latest entry by default
-		return entry
+		# Upstream returned the latest entry here; see meta_time_strict
+		return _out_of_range("focal plane %s" % wafer_name, t, entries)
 	def get_by_wafer(self, wafer_name, t):
 		"""This takes a full wafer name, which is not the same as a wafer slot"""
 		entry = self.find_entry(wafer_name, t)
@@ -801,8 +809,8 @@ class PointingModelCache:
 		for i, entry in enumerate(self.index):
 			if entry[0] <= t and t < entry[1]:
 				return entry
-		# Return latest entry by default
-		return entry
+		# Upstream returned the latest entry here; see meta_time_strict
+		return _out_of_range("pointing model %s" % self.fname, t, self.index)
 	def get_by_time(self, t):
 		entry = self.find_entry(t)
 		hfname, gname = entry[2:4]
@@ -871,17 +879,29 @@ class SidelobeInfoLoader:
 class EpochDb:
 	def __init__(self, fname):
 		self.fname = fname
+		self.by_obs = None
 		with sqlite.open(fname) as sfile:
+			if "obs:obs_id" in sfile.columns("map") and "obs:timestamp__lo" not in sfile.columns("map"):
+				# yilung-fixes: a product keyed by observation (sotodlib's exact obs:obs_id match). Upstream read it
+				# through trange_fmt as one range from -inf to +inf per entry, so every observation got the first entry
+				query = "select [obs:obs_id], files.name, dataset from map inner join files on file_id = files.id"
+				self.by_obs = {obs: (os.path.join(os.path.dirname(fname), fn), group) for obs, fn, group in sfile.execute(query)}
+				self.index = []
+				return
 			query = trange_fmt(sfile, "select {t1}, {t2}, files.name, dataset from map inner join files on file_id = files.id")
 			# Get the mapping from time-range to hdf-file and dataset.
 			# Also make relative paths work
 			self.index = [(t1, t2, os.path.join(os.path.dirname(fname), fn), group) for t1,t2,fn,group in sfile.execute(query)]
-	def lookup(self, t):
+	def lookup(self, t, obsid=None):
+		if self.by_obs is not None:
+			if obsid is None: raise ValueError("%s is keyed by obs:obs_id; lookup needs the obs_id" % self.fname)
+			try: return self.by_obs[obsid]
+			except KeyError: raise errors.DataMissing("%s: no entry for %s" % (self.fname, obsid))
 		for i, entry in enumerate(self.index):
 			if entry[0] <= t and t < entry[1]:
 				return entry[2:]
-		# Return latest entry by default
-		return entry[2:]
+		# Upstream returned the latest entry here; see meta_time_strict
+		return _out_of_range(self.fname, t, self.index)[2:]
 
 class RelcalCache:
 	def __init__(self, fname):
@@ -890,7 +910,7 @@ class RelcalCache:
 	def get(self, subid):
 		# Infer the time from the subid
 		info  = parse_subid(subid)
-		fname, group = self.epochs.lookup(info.ctime)
+		fname, group = self.epochs.lookup(info.ctime, obsid=info.obsid)
 		key = (fname, group)
 		if key not in self.cache:
 			with h5py.File(fname, "r") as hfile:
@@ -905,8 +925,8 @@ class AcalCache:
 	def __init__(self, fname):
 		self.epochs = EpochDb(fname)
 		self.cache  = {}
-	def get(self, t, stream_id, wafer, band):
-		fname, group = self.epochs.lookup(t)
+	def get(self, t, stream_id, wafer, band, obsid=None):
+		fname, group = self.epochs.lookup(t, obsid=obsid)
 		# Try to look up both alternatives in cache
 		try: return self.cache[(fname, group, stream_id, band)]
 		except KeyError: pass
@@ -931,7 +951,7 @@ class AcalCache:
 	def get_by_subid(self, subid, stream_id):
 		toks  = parse_subid(subid)
 		ctime = float(toks.obsid.split("_")[1])
-		return self.get(ctime, stream_id, toks.wslot, toks.band)
+		return self.get(ctime, stream_id, toks.wslot, toks.band, obsid=toks.obsid)
 
 # This takes 0.3 s the first time and 0 s later.
 # Considering that the python version takes 0.3 ms,
