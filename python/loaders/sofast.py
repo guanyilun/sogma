@@ -951,7 +951,11 @@ class AcalCache:
 	def get_by_subid(self, subid, stream_id):
 		toks  = parse_subid(subid)
 		ctime = float(toks.obsid.split("_")[1])
-		return self.get(ctime, stream_id, toks.wslot, toks.band, obsid=toks.obsid)
+		res   = self.get(ctime, stream_id, toks.wslot, toks.band, obsid=toks.obsid)
+		# yilung-fixes: a row present but not calibrated (NaN, as products mark streams they do not cover) is missing
+		if not np.isfinite(res.abscal_cmb):
+			raise errors.DataMissing("abscal for %s %s is NaN (not calibrated)" % (subid, stream_id))
+		return res
 
 # This takes 0.3 s the first time and 0 s later.
 # Considering that the python version takes 0.3 ms,
