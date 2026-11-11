@@ -2,6 +2,7 @@ import numpy as np, os, warnings
 import time, h5py
 from pixell import utils, bunch, enmap, colors, wcsutils, bench, config
 from . import nmat, pmat, tiling, gutils, device, socal, errors
+from . import inject
 from .logging import L
 
 # Prior handling
@@ -134,6 +135,8 @@ class MLMapmaker:
 		t2 = self.dev.time()
 		gtod = self.dev.pools["tod"].array(tod)
 		del tod
+		# Signal injection for mapmaking tests (python/inject.py); off unless SOGMA_INJECT is set
+		if inject.active(): inject.apply(gtod, obs, self.dev)
 		# If we have a signal guess, then temporarily subtract that when gapfilling
 		# and building the noise model. Safe to use the ft buffer here, though we'll have
 		# to rebuild it just after, since the noise model overwrites it. We also have
