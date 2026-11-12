@@ -370,6 +370,23 @@ class NmatDetvecs(Nmat):
 			b = np.maximum(1,b)
 			E[bi], D[bi], Nd[bi] = measure_detvecs(ft[:,b[0]:b[1]], V)
 		del Nd, ft
+		# yilung-leverage: D is the variance of what is left of each detector after the modes
+		# are fitted out of the same data, r = (1-P)d with P = V(V'V)"V'. For uncorrelated
+		# noise of variance s2 that is <r_i^2> = sum_j (1-P)_ij^2 s2_j, less than s2_i by the
+		# detector's leverage P_ii. A detector the modes span (leverage near 1, e.g. its own
+		# noise split over several modes, each under single_lim) is left with D near 0 and a
+		# runaway weight. Solve for s2 instead of using <r^2>.
+		if config.get("nmat_leverage"):
+			V64 = self.dev.np.asarray(V, np.float64)
+			P   = V64.dot(self.dev.np.linalg.solve(V64.T.dot(V64), V64.T))
+			M   = (self.dev.np.eye(ndet) - P)**2
+			s2  = self.dev.np.linalg.solve(M, self.dev.np.asarray(D, np.float64).T).T
+			lev = self.dev.np.diag(P)
+			L.print("nmat leverage: max %.4f, %d detectors above 0.5; D raised by median %.3f, max %.3g" % (float(lev.max()), int((lev>0.5).sum()), float(self.dev.np.median(self.dev.np.maximum(s2/D,1))), float(self.dev.np.max(self.dev.np.maximum(s2/D,1)))), level=2)
+			# where the solution is not above the equal-noise estimate <r^2>/(1-leverage) (it can even be
+			# negative for a detector the modes span, whose own variance the data no longer constrain), use that
+			D   = self.dev.np.maximum(s2, D/self.dev.np.maximum(1-lev, 1e-6)).astype(dtype)
+			del V64, P, M, s2
 		# Optionally downweight the lowest frequency bins
 		if self.downweight is not None and len(self.downweight) > 0:
 			D[:len(self.downweight)] /= self.dev.np.array(self.downweight)[:,None]
@@ -1452,6 +1469,7 @@ def freq2ind(freqs, srate, nfreq, rfun=None):
 
 config.default("nmat_nmax_frac", 0.1, "yilung-nmax: largest number of correlated modes of NmatDetvecs as a fraction of the detectors (upstream: 0.1, fixed)")
 config.default("nmat_mode_nmin", 1000, "yilung-modebins: fewest Fourier samples in a mode bin of NmatDetvecs before it merges into the next (upstream: 1000, fixed); lower it to give jonlow's 0.02-0.25 Hz range a mode bin of its own")
+config.default("nmat_leverage", False, "yilung-leverage: correct NmatDetvecs' uncorrelated variances for the modes having been fitted out of the same data (a detector the modes span otherwise gets a runaway weight)")
 config.default("nmat_modes64", False, "yilung-modes64: find the correlated modes of NmatDetvecs in double precision (single precision leaves nearly parallel modes)")
 config.default("nmat_lines", False, "yilung-lines: find narrow lines in the correlated modes' power and give each its own noise bin (NmatDetvecs)")
 config.default("nmat_line_ratio", 3.0, "yilung-lines: a line is where any mode's power, averaged over nmat_line_smooth Hz, exceeds this times its running median over +-0.5 Hz")
