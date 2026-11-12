@@ -347,7 +347,7 @@ class NmatDetvecs(Nmat):
 		if np.any(np.diff(mode_bins) < 0):
 			raise RuntimeError(f"At least one of the frequency bins has a negative range: \n{mode_bins}")
 		# Then use these to get our set of basis vectors
-		V = find_modes_jon(ft, mode_bins, eig_lim=self.eig_lim, single_lim=self.single_lim, force_common=True, verbose=self.verbose, dtype=dtype)
+		V = find_modes_jon(ft, mode_bins, eig_lim=self.eig_lim, single_lim=self.single_lim, force_common=True, nmax_frac=config.get("nmat_nmax_frac"), verbose=self.verbose, dtype=dtype)
 		nmode= V.shape[1]
 		if V.size == 0: raise errors.ModelError("Could not find any noise modes")
 		# Cut bins that extend beyond our max frequency
@@ -1450,6 +1450,7 @@ def freq2ind(freqs, srate, nfreq, rfun=None):
 	if rfun  is None: rfun = np.ceil
 	return rfun(np.asarray(freqs)/(srate/2.0)*nfreq).astype(int)
 
+config.default("nmat_nmax_frac", 0.1, "yilung-nmax: largest number of correlated modes of NmatDetvecs as a fraction of the detectors (upstream: 0.1, fixed)")
 config.default("nmat_modes64", False, "yilung-modes64: find the correlated modes of NmatDetvecs in double precision (single precision leaves nearly parallel modes)")
 config.default("nmat_lines", False, "yilung-lines: find narrow lines in the correlated modes' power and give each its own noise bin (NmatDetvecs)")
 config.default("nmat_line_ratio", 3.0, "yilung-lines: a line is where any mode's power, averaged over nmat_line_smooth Hz, exceeds this times its running median over +-0.5 Hz")
