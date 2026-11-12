@@ -343,7 +343,7 @@ class NmatDetvecs(Nmat):
 		#del tod
 		# First build our set of eigenvectors in two bins. The first goes from
 		# 0.25 to 4 Hz the second from 4Hz and up
-		mode_bins = makebins(self.mode_bins, srate, nfreq, 1000, rfun=np.round)[1:]
+		mode_bins = makebins(self.mode_bins, srate, nfreq, config.get("nmat_mode_nmin"), rfun=np.round)[1:]
 		if np.any(np.diff(mode_bins) < 0):
 			raise RuntimeError(f"At least one of the frequency bins has a negative range: \n{mode_bins}")
 		# Then use these to get our set of basis vectors
@@ -1451,6 +1451,7 @@ def freq2ind(freqs, srate, nfreq, rfun=None):
 	return rfun(np.asarray(freqs)/(srate/2.0)*nfreq).astype(int)
 
 config.default("nmat_nmax_frac", 0.1, "yilung-nmax: largest number of correlated modes of NmatDetvecs as a fraction of the detectors (upstream: 0.1, fixed)")
+config.default("nmat_mode_nmin", 1000, "yilung-modebins: fewest Fourier samples in a mode bin of NmatDetvecs before it merges into the next (upstream: 1000, fixed); lower it to give jonlow's 0.02-0.25 Hz range a mode bin of its own")
 config.default("nmat_modes64", False, "yilung-modes64: find the correlated modes of NmatDetvecs in double precision (single precision leaves nearly parallel modes)")
 config.default("nmat_lines", False, "yilung-lines: find narrow lines in the correlated modes' power and give each its own noise bin (NmatDetvecs)")
 config.default("nmat_line_ratio", 3.0, "yilung-lines: a line is where any mode's power, averaged over nmat_line_smooth Hz, exceeds this times its running median over +-0.5 Hz")
