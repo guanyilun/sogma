@@ -134,6 +134,8 @@ class FastMeta:
 			good = np.full(len(detinfo.channels), True)
 			if dets   is not None: good &= np.isin(detinfo.channels, dets,   assume_unique=True)
 			if detids is not None: good &= np.isin(detinfo.dets,     detids, assume_unique=True)
+			# yilung: a white list that leaves a wafer empty is that wafer's data missing, not a crash in detname2band
+			if not np.any(good): raise errors.DataMissing("no detectors left after the dets/detids white list")
 			aman = minisotodlib.AxisManager(minisotodlib.LabelAxis("dets", detinfo.channels[good]))
 			aman.wrap("det_ids", detinfo.dets[good], [(0,"dets")])
 			aman.wrap("det_pix", detinfo.pix [good], [(0,"dets")])
