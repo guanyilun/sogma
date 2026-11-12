@@ -1415,16 +1415,18 @@ def apply_vecs2(ftod, iD, V, Vinds,  Kh, bins, tmp, vtmp, divtmp, dev=None, out=
 
 # TODO: This one allocates temporary tod and cov arrays.
 # Use dev.lib.sgemm to avoid cov copies?
-def measure_cov(d, nmax=10000, normalize=True, return_norm=False):
+def measure_cov(d, nmax=10000, normalize=True, return_norm=False, wdtype=None):
+	# wdtype: accumulate in this real dtype instead of the data's (yilung-modes64)
 	ap    = device.anypy(d)
 	d     = d[:,::max(1,d.shape[1]//nmax)]
 	n,m   = d.shape
-	cov   = ap.zeros((n,n),utils.real_dtype(d.dtype))
+	cov   = ap.zeros((n,n),wdtype or utils.real_dtype(d.dtype))
 	# Blocked calculation to save memory
 	step  = 10000
 	norm  = 0
 	for i in range(0,m,step):
 		sub   = ap.ascontiguousarray(d[:,i:i+step])
+		if wdtype is not None: sub = sub.astype(utils.complex_dtype(wdtype) if np.iscomplexobj(d) else wdtype)
 		cov  += sub.dot(ap.conj(sub.T)).real
 		norm += sub.shape[1]
 	if np.iscomplexobj(d): norm *= 2
@@ -1448,6 +1450,7 @@ def freq2ind(freqs, srate, nfreq, rfun=None):
 	if rfun  is None: rfun = np.ceil
 	return rfun(np.asarray(freqs)/(srate/2.0)*nfreq).astype(int)
 
+config.default("nmat_modes64", False, "yilung-modes64: find the correlated modes of NmatDetvecs in double precision (single precision leaves nearly parallel modes)")
 config.default("nmat_lines", False, "yilung-lines: find narrow lines in the correlated modes' power and give each its own noise bin (NmatDetvecs)")
 config.default("nmat_line_ratio", 3.0, "yilung-lines: a line is where any mode's power, averaged over nmat_line_smooth Hz, exceeds this times its running median over +-0.5 Hz")
 config.default("nmat_line_fmin", 1.0, "yilung-lines: lowest line frequency in Hz (below it the default bins are already narrow)")
@@ -1548,6 +1551,13 @@ def find_modes_jon(ft, bins, eig_lim=None, single_lim=0, force_common=False, nma
 	ap   = device.anypy(ft)
 	ndet, nfreq = ft.shape
 	nmax = int(ndet*nmax_frac)+1
+	# yilung-modes64: in single precision the deprojection of the modes already found
+	# (project_out_from_matrix) leaves a remnant of the strong ones, which the next bin
+	# finds again: nearly parallel modes and an ill-conditioned noise model. Find the modes
+	# in double precision and return them in the requested dtype.
+	odtype = dtype
+	wdtype = np.float64 if config.get("nmat_modes64") else None
+	if wdtype is not None: dtype = wdtype
 	# Set up our output arrays
 	vecs = ap.zeros([ndet,0],dtype=dtype)
 	eigs = []
@@ -1558,7 +1568,7 @@ def find_modes_jon(ft, bins, eig_lim=None, single_lim=0, force_common=False, nma
 		eigs.append(ap.array([np.var(v.T.dot(ft))], dtype=dtype))
 	# Measure new orthogonal modes in each bin
 	for bi, b in enumerate(bins):
-		cov  = measure_cov(ft[:,b[0]:b[1]])
+		cov  = measure_cov(ft[:,b[0]:b[1]], wdtype=wdtype)
 		ndof = 2*(b[1]-b[0])
 		v, e = find_modes_single(cov, ndof, deproj=vecs, eig_lim=eig_lim, single_lim=single_lim, nmax_frac=nmax_frac, verbose=verbose, verb_prefix="bin %d %5d %5d " % (bi, b[0], b[1]), dtype=dtype, return_eigs=True)
 		# How many do modes can we afford?
@@ -1568,7 +1578,8 @@ def find_modes_jon(ft, bins, eig_lim=None, single_lim=0, force_common=False, nma
 		eigs.append(e)
 		# Exit early if we've used our allowance
 		if vecs.shape[1] >= nmax: break
-	eigs = ap.concatenate(eigs)
+	eigs = ap.concatenate(eigs).astype(odtype)
+	vecs = vecs.astype(odtype)
 	if return_eigs: return vecs, eigs
 	else: return vecs
 
