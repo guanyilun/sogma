@@ -137,6 +137,7 @@ class MLMapmaker:
 		del tod
 		# Signal injection for mapmaking tests (python/inject.py); off unless SOGMA_INJECT is set
 		if inject.active(): inject.apply(gtod, obs, self.dev)
+		if inject.coverage_active(): inject.coverage(id, obs)
 		# If we have a signal guess, then temporarily subtract that when gapfilling
 		# and building the noise model. Safe to use the ft buffer here, though we'll have
 		# to rebuild it just after, since the noise model overwrites it. We also have
