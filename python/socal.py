@@ -110,6 +110,19 @@ def lat_cut(obs, latrange, id="?", sys="gal", dev=None, meta=None):
 	cuts = mask2cut_tod(lat, dev=dev, pool=dev.pools["ft"])
 	return [cuts]
 
+config.default("sidelobe_roll", "maps", "Boresight roll for the sidelobe cut. 'maps' (yilung-fixes): the roll of SO's sidelobe maps, i.e. without the corotator encoder offset that yilung-crfix applies in lat_v2, since the masks (SO's lat_sidelobe_masks and ours) were made and judged on those maps; 'pointing': the roll as loaded")
+
+def sidelobe_obs(obs, meta):
+	"""obs with the boresight roll of SO's sidelobe maps (yilung-fixes, 2026-11-14): lat_v2 with enc_offset_cr lowers the roll by enc_offset_cr."""
+	model = getattr(meta, "pointing_model", None) if meta is not None else None
+	if config.get("sidelobe_roll") != "maps" or model is None or getattr(model, "version", None) != "lat_v2":
+		return obs
+	offset = getattr(model, "enc_offset_cr", 0) or 0
+	if offset == 0: return obs
+	boresight = obs.boresight.copy()
+	boresight[2] += offset
+	return bunch.Bunch(**{**obs, "boresight": boresight})
+
 sidelobe_cutters = {}
 def sidelobe_cut(obs, id="?", object_list=None, geo=None, dev=None, meta=None):
 	if object_list is None: object_list = ["sun", "moon"]
@@ -117,6 +130,7 @@ def sidelobe_cut(obs, id="?", object_list=None, geo=None, dev=None, meta=None):
 	if meta is None or "sidelobes" not in meta or meta.sidelobes is None:
 		L.print("Skipping sidelobe cut - mask metadata missing", level=2, color=colors.red)
 		return cutss
+	obs = sidelobe_obs(obs, meta)
 	for name in object_list:
 		try: field = meta.sidelobes.fields.index(name)
 		except ValueError as e:
