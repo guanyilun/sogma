@@ -365,10 +365,17 @@ class NmatDetvecs(Nmat):
 		E  = self.dev.np.zeros([nbin,nmode],dtype)
 		D  = self.dev.np.zeros([nbin,ndet],dtype)
 		Nd = self.dev.np.zeros([nbin,ndet],dtype)
+		# yilung-fullcov: the modes' amplitudes are correlated within a bin (strongly so on real
+		# data), and diag(E) then over-predicts the variance along combinations whose
+		# amplitudes partly cancel. With nmat_fullcov the full covariance of the amplitudes is kept per bin.
+		fullcov = config.get("nmat_fullcov")
+		C  = self.dev.np.zeros([nbin,nmode,nmode],np.float64) if fullcov else None
 		for bi, b in enumerate(bins):
 			# Skip the DC mode, since it's it's unmeasurable and filtered away
 			b = np.maximum(1,b)
 			E[bi], D[bi], Nd[bi] = measure_detvecs(ft[:,b[0]:b[1]], V)
+			if fullcov:
+				C[bi] = measure_mode_cov(ft[:,b[0]:b[1]], V)
 		del Nd, ft
 		# yilung-leverage: D is the variance of what is left of each detector after the modes
 		# are fitted out of the same data, r = (1-P)d with P = V(V'V)"V'. For uncorrelated
@@ -399,12 +406,25 @@ class NmatDetvecs(Nmat):
 		# Precompute Kh = (E" + V'D"V)**-0.5
 		Kh = self.dev.np.zeros([nbin,nmode,nmode],dtype)
 		for bi in range(nbin):
-			iK = self.dev.np.diag(iE[bi]) + V.T.dot(iD[bi,:,None] * V)
-			Kh[bi] = np.linalg.cholesky(self.dev.np.linalg.inv(iK))
+			if fullcov:
+				# K = (C" + V'D"V)": the inverse of the amplitude covariance through its eigenvalues,
+				# floored at 1e-12 of the largest so that a bin with few samples stays invertible
+				w, U = self.dev.np.linalg.eigh(C[bi])
+				w    = self.dev.np.maximum(w, w.max()*1e-12)
+				iC   = (U/w).dot(U.T)
+				V64  = self.dev.np.asarray(V, np.float64)
+				iK   = iC + V64.T.dot(self.dev.np.asarray(iD[bi,:,None], np.float64) * V64)
+				Kh[bi] = np.linalg.cholesky(self.dev.np.linalg.inv(iK)).astype(dtype)
+			else:
+				iK = self.dev.np.diag(iE[bi]) + V.T.dot(iD[bi,:,None] * V)
+				Kh[bi] = np.linalg.cholesky(self.dev.np.linalg.inv(iK))
+		if fullcov: L.print("nmat fullcov: full mode covariance in %d bins" % nbin, level=2)
 		# Construct a fully initialized noise matrix
 		nmat = NmatDetvecs(bin_edges=self.bin_edges, eig_lim=self.eig_lim, single_lim=self.single_lim,
 				window=self.window, nwin=nwin, downweight=self.downweight, verbose=self.verbose,
 				bins=bins, iD=iD, V=V, Kh=Kh, iE=iE, ivar=ivar, dev=self.dev)
+		# yilung-fullcov: the amplitude covariance the model uses, for diagnostics (not written)
+		nmat.mode_cov = C if fullcov else None
 		return nmat
 	def apply(self, gtod, inplace=True):
 		self.check_ready()
@@ -1471,6 +1491,7 @@ config.default("nmat_nmax_frac", 0.1, "yilung-nmax: largest number of correlated
 config.default("nmat_mode_nmin", 1000, "yilung-modebins: fewest Fourier samples in a mode bin of NmatDetvecs before it merges into the next (upstream: 1000, fixed); lower it to give jonlow's 0.02-0.25 Hz range a mode bin of its own")
 config.default("nmat_leverage", False, "yilung-leverage: correct NmatDetvecs' uncorrelated variances for the modes having been fitted out of the same data (a detector the modes span otherwise gets a runaway weight)")
 config.default("nmat_modes64", False, "yilung-modes64: find the correlated modes of NmatDetvecs in double precision (single precision leaves nearly parallel modes)")
+config.default("nmat_fullcov", False, "yilung-fullcov: NmatDetvecs keeps the full covariance of the mode amplitudes per bin instead of its diagonal E (the amplitudes are correlated, and diag(E) over-predicts the variance of combinations such as polarized common patterns)")
 config.default("nmat_lines", False, "yilung-lines: find narrow lines in the correlated modes' power and give each its own noise bin (NmatDetvecs)")
 config.default("nmat_line_ratio", 3.0, "yilung-lines: a line is where any mode's power, averaged over nmat_line_smooth Hz, exceeds this times its running median over +-0.5 Hz")
 config.default("nmat_line_fmin", 1.0, "yilung-lines: lowest line frequency in Hz (below it the default bins are already narrow)")
@@ -1715,6 +1736,15 @@ def noise_modes_hybrid(ft, bins, weight=None, mask=None, eig_lim=16, single_lim=
 	imap  = np.cumsum(used)-1 # hacky!
 	Vinds = [imap[vind] for vind in Vinds]
 	return bunch.Bunch(V=V, Vinds=Vinds, Es=Es, Ds=Ds)
+
+def measure_mode_cov(ft, vecs):
+	"""yilung-fullcov: the full covariance [nmode,nmode] of the mode amplitudes in a bin of ft, the
+	amplitudes fitted as in measure_detvecs (non-orthogonal vecs allowed), in float64."""
+	ap   = device.anypy(ft)
+	ft64 = ap.asarray(ft, ap.complex128)
+	v64  = ap.asarray(vecs, ap.float64)
+	amps = ap.linalg.solve(v64.T.dot(v64), v64.T.dot(ft64))
+	return ap.real(amps.dot(ap.conj(amps).T))/amps.shape[1]
 
 def measure_detvecs(ft, vecs):
 	# Measure amps when we have non-orthogonal vecs
