@@ -240,7 +240,13 @@ try:
 				# Sadly, we don't have a blas version of this it seems, which
 				# means we don't get any thread speedup if we don't implement it
 				# ourself.
-				if   side.lower() == 'r': C[:] = X[:,None]*A
+				if   side.lower() == 'r':
+					# yilung-perf: threaded in cpu_mm (fast_kernels.so) when it can be; numpy is one thread and
+					# this scaling passed over every Fourier coefficient was 80% of NmatDetvecs' apply_vecs
+					fast = getattr(cpu_mm, "scale_rows", None)
+					if (fast is None or A.ndim != 2 or A.shape != C.shape or X.ndim != 1 or len(X) != A.shape[0]
+							or not fast(C, A, X, A.shape[1], A.shape[0], A.strides[0]//A.itemsize, C.strides[0]//C.itemsize)):
+						C[:] = X[:,None]*A
 				elif side.lower() == 'l': C[:] = A*X[None,:]
 				else: raise ValueError("Unrecognized side '%s'" % str(side))
 			self.lib.dgmm = dgmm
