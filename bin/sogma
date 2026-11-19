@@ -36,6 +36,8 @@ parser.add_argument(      "--pickup",  type=str, default="none")
 parser.add_argument(      "--joint-sys", type=str, default=None, help="Also solve for a second T/Q/U map in this coordinate system (e.g. hor), jointly with the main map")
 parser.add_argument(      "--joint-geometry", type=str, default=None, help="Geometry file of the --joint-sys map (default: the main map's geometry)")
 parser.add_argument(      "--precon",  type=str, default="ivar")
+parser.add_argument(      "--cg-save", action="store_true", help="Save the full CG state (one HDF5 file per MPI task, <prefix>cg_state_<rank>of<size>.h5) at each dump and at the end, overwriting the last; full mode only")
+parser.add_argument(      "--cg-load", type=str, default=None, help="Continue the CG iteration from a state saved with --cg-save under this prefix (the earlier run's output prefix, e.g. odir/split_0_); needs the same observations, MPI layout and options; full mode only")
 parser.add_argument(      "--dets",    type=str, default=None, help="Path to file with white-list of channel ids, e.g. sch_ufm_mv21_1755145838_3_338. See --detids if you want to use detector ids instead")
 parser.add_argument(      "--detids",  type=str, default=None, help="Path to file with white-list of detector ids, e.g. Mv21_f090_Ar00c02A. One per line. See --dets if you want to use channel ids instead")
 parser.add_argument(      "--ocomps",  type=str, default="0,1,2")
@@ -171,10 +173,12 @@ else: raise ValueError("Unrecognized noise model '%s'" % (str(args.nmat)))
 # Set up the mapmaker
 mapmaker = mapmaking.MLMapmaker(signals=signals, dtype=dtype, verbose=True, noise_model=noise_model, dev=dev, outputs=ml_out)
 if   args.mode == "full":
-	mapmaking.make_map(mapmaker, linfo, comm_all, prefix=prefix, dump=dump, npass=args.npass, maxiter=args.maxiter, maxerr=args.maxerr, ignore=args.ignore, cont=args.cont)
+	mapmaking.make_map(mapmaker, linfo, comm_all, prefix=prefix, dump=dump, npass=args.npass, maxiter=args.maxiter, maxerr=args.maxerr, ignore=args.ignore, cont=args.cont, cg_save=args.cg_save, cg_load=args.cg_load)
 elif args.mode == "individual":
+	if args.cg_save or args.cg_load: raise ValueError("--cg-save and --cg-load work in full mode only")
 	mapmaking.make_maps_perobs(mapmaker, linfo, comm_all, comm_per, prefix=prefix, dump=dump, npass=args.npass, maxiter=args.maxiter, maxerr=args.maxerr, ignore=args.ignore, cont=args.cont)
 elif args.mode == "depth1":
+	if args.cg_save or args.cg_load: raise ValueError("--cg-save and --cg-load work in full mode only")
 	mapmaking.make_maps_depth1(mapmaker, linfo, comm_all, comm_per, prefix=prefix, dump=dump, npass=args.npass, maxiter=args.maxiter, maxerr=args.maxerr, ignore=args.ignore, cont=args.cont)
 elif args.mode == "fplane":
 	mapmaking.fplane_movie(shape, wcs, linfo, comm_all, dev=dev, prefix=prefix, ignore=args.ignore, autocrop=args.autocrop)
