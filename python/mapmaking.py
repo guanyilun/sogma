@@ -255,16 +255,21 @@ class MLMapmaker:
 		t2 = self.dev.time()
 		L.print("M %6.3f" % (t2-t1), level=2)
 		return result
-	def solve(self, maxiter=500, maxerr=1e-6, x0=None):
+	def solve(self, maxiter=500, maxerr=1e-6, x0=None, cg_load=None, cg_save=None, save_steps=()):
+		"""cg_load(solver) restores a saved CG state before the first step; cg_save(solver)
+		is called after each step in save_steps and after the last step."""
 		self.prepare()
 		rhs    = self.dof.zip([signal.rhs for signal in self.signals])
 		solver = utils.CG(self.A, rhs, M=self.M, dot=self.dof.dot, x0=x0)
+		if cg_load is not None: cg_load(solver)
 		#solver = utils.Minres(self.A, rhs, dot=self.dof.dot)
 		while solver.i < maxiter and solver.err > maxerr:
 			t1 = time.time()
 			solver.step()
 			t2 = time.time()
+			if cg_save is not None and solver.i in save_steps: cg_save(solver)
 			yield bunch.Bunch(i=solver.i, err=solver.err, x=solver.x, t=t2-t1)
+		if cg_save is not None and solver.i not in save_steps: cg_save(solver)
 		self.x = solver.x
 	def set_outputs(self, outputs):
 		self.outputs= check_outputs(outputs, self.valid_outputs, self.__class__.__name__)
@@ -1548,7 +1553,45 @@ def make_catch_list(ignore):
 	return sum([catch_map[tok] for tok in ignore.split(",")],())
 
 # Mapmaking function
-def make_map_core(mapmaker, loadinfo, comm, inds=None, prefix=None, dump=[], maxiter=500, maxerr=1e-7, prealloc=True, ignore="recover", cont=False, dets=None, detids=None, signal_guess=None, restart=False):
+CG_STATE_KEYS = ["i", "rz", "rz0", "x", "r", "p", "err"]
+
+def cg_state_path(prefix, comm):
+	return "%scg_state_%03dof%03d.h5" % (prefix, comm.rank, comm.size)
+
+def cg_state_saver(mapmaker, prefix, comm):
+	"""Save the full CG state (pixell's CG.save keys) of this rank, with the observation ids and
+	the local number of degrees of freedom, so that cg_state_loader can continue the same iteration."""
+	import h5py
+	def save(solver):
+		path = cg_state_path(prefix, comm)
+		with h5py.File(path + ".tmp", "w") as hfile:
+			for key in CG_STATE_KEYS:
+				value = getattr(solver, key)
+				hfile[key] = mapmaker.dev.get(value) if hasattr(value, "shape") and value.shape else float(value) if key != "i" else int(value)
+			hfile.attrs["ids"]  = "\n".join([data.id for data in mapmaker.datas])
+			hfile.attrs["ndof"] = solver.x.size
+		os.replace(path + ".tmp", path)
+		L.print("Saved CG state at step %d to %s" % (solver.i, path), level=2)
+	return save
+
+def cg_state_loader(mapmaker, prefix, comm):
+	"""Restore a state written by cg_state_saver; the observations, their order on this rank and
+	the number of degrees of freedom must be the same, or it stops."""
+	import h5py
+	def load(solver):
+		path = cg_state_path(prefix, comm)
+		with h5py.File(path, "r") as hfile:
+			ids = "\n".join([data.id for data in mapmaker.datas])
+			if hfile.attrs["ids"] != ids or hfile.attrs["ndof"] != solver.x.size:
+				raise ValueError("CG state %s does not match this run's observations or degrees of freedom" % path)
+			for key in CG_STATE_KEYS:
+				value = hfile[key][()]
+				if key in ["x", "r", "p"]: value = mapmaker.dev.np.asarray(value, dtype=solver.x.dtype)
+				setattr(solver, key, value)
+		L.print("Loaded CG state at step %d from %s" % (solver.i, path), level=1)
+	return load
+
+def make_map_core(mapmaker, loadinfo, comm, inds=None, prefix=None, dump=[], maxiter=500, maxerr=1e-7, prealloc=True, ignore="recover", cont=False, dets=None, detids=None, signal_guess=None, restart=False, cg_save=False, cg_load=None):
 	if prefix is None: prefix = ""
 	# Skip if we're already done
 	if cont and (os.path.exists(prefix + ".empty") or all([signal.written(prefix) for signal in mapmaker.signals])):
@@ -1618,7 +1661,9 @@ def make_map_core(mapmaker, loadinfo, comm, inds=None, prefix=None, dump=[], max
 	# Solve the equation system
 	step = None
 	x0   = mapmaker.dof.zip(signal_guess.vals) if signal_guess and not restart else None
-	for step in mapmaker.solve(maxiter=maxiter, maxerr=maxerr, x0=x0):
+	saver  = cg_state_saver(mapmaker, prefix, comm) if cg_save else None
+	loader = cg_state_loader(mapmaker, cg_load, comm) if cg_load else None
+	for step in mapmaker.solve(maxiter=maxiter, maxerr=maxerr, x0=x0, cg_load=loader, cg_save=saver, save_steps=dump):
 		# Dump if we're in dump-list, or a multiple of the last entry, but not if
 		# we're on the final iteration anyway, since that would be redundant with
 		# the final result
@@ -1641,7 +1686,7 @@ def make_map_core(mapmaker, loadinfo, comm, inds=None, prefix=None, dump=[], max
 # a new mapmaker. Easiest if I can create a new empty mapmaker based
 # on the old one.
 # Mapmaking function
-def make_map(mapmaker, loadinfo, comm, inds=None, prefix=None, dump=[], npass=1, maxiter=500, maxerr=1e-7, prealloc=True, ignore="recover", cont=False, dets=None, detids=None, restart=False):
+def make_map(mapmaker, loadinfo, comm, inds=None, prefix=None, dump=[], npass=1, maxiter=500, maxerr=1e-7, prealloc=True, ignore="recover", cont=False, dets=None, detids=None, restart=False, cg_save=False, cg_load=None):
 	"""Like make_map_core, but performs multipass mapmaking. Each pass produces its own set of files.
 	If npass > 1, then the the 1-based pass number appended to the prefix, e.g. pass1, pass2, etc.
 	This function has no overhead compared to make_map when only one pass is used. On subsequent
@@ -1671,7 +1716,8 @@ def make_map(mapmaker, loadinfo, comm, inds=None, prefix=None, dump=[], npass=1,
 		pass_prefix = make_prefix(prefix, ipass)
 		mapmaker    = make_map_core(mapmaker.new(), loadinfo, comm, inds=inds, prefix=pass_prefix,
 			dump=dump, maxiter=utils.iorlast(maxiter,ipass), maxerr=utils.iorlast(maxerr,ipass), prealloc=prealloc,
-			ignore=ignore, cont=False, dets=dets, detids=detids, signal_guess=prev_evaluator, restart=restart)
+			ignore=ignore, cont=False, dets=dets, detids=detids, signal_guess=prev_evaluator, restart=restart,
+			cg_save=cg_save and ipass == npass-1, cg_load=cg_load if ipass == 0 else None)
 		if not mapmaker: return None
 		if ipass < npass-1:
 			prev_evaluator = mapmaker.evaluator()
